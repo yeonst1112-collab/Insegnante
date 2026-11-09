@@ -1,0 +1,96 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 이메일로 로그인한 회원 (익명 로그인은 회원으로 보지 않음)
+    function signedIn() {
+      return request.auth != null && request.auth.token.firebase.sign_in_provider != 'anonymous';
+    }
+    function isAdmin() {
+      return signedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+    // 관리자가 '바로 공개'를 켰는지 (settings/reviews.autoApprove)
+    function autoApprove() {
+      return exists(/databases/$(database)/documents/settings/reviews)
+        && get(/databases/$(database)/documents/settings/reviews).data.autoApprove == true;
+    }
+
+    // ── 회원 정보 (닉네임) ──
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow create: if signedIn() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['nickname', 'email', 'createdAt'])
+        && request.resource.data.nickname is string
+        && request.resource.data.nickname.size() >= 2 && request.resource.data.nickname.size() <= 12
+        && request.resource.data.email == request.auth.token.email;
+      // 본인은 닉네임만 바꿀 수 있음
+      allow update: if signedIn() && request.auth.uid == uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['nickname'])
+        && request.resource.data.nickname is string
+        && request.resource.data.nickname.size() >= 2 && request.resource.data.nickname.size() <= 12;
+      allow delete: if isAdmin();
+    }
+
+    // ── 수강 후기 ──
+    //  읽기: 공개된 후기는 누구나(로그인 안 해도), 내 후기는 공개 전에도 나만, 관리자는 전부
+    //  쓰기: 회원만. 상태는 'pending'(승인 후 공개), 관리자가 '바로 공개'를 켰을 때만 'approved'
+    //  수정(승인·반려 포함)·삭제: 관리자만
+    match /reviews/{id} {
+      allow read: if resource.data.status == 'approved' || isAdmin()
+        || (signedIn() && resource.data.uid == request.auth.uid);
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['teacher', 'course', 'progress', 'rating', 'text', 'nickname', 'status', 'uid', 'createdAt'])
+        && (request.resource.data.status == 'pending'
+            || (request.resource.data.status == 'approved' && autoApprove()))
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.teacher is string && request.resource.data.teacher.size() <= 50
+        && request.resource.data.course is string && request.resource.data.course.size() <= 100
+        && request.resource.data.progress is number
+        && request.resource.data.progress >= 10 && request.resource.data.progress <= 100
+        && request.resource.data.rating is int
+        && request.resource.data.rating >= 1 && request.resource.data.rating <= 5
+        && request.resource.data.text is string
+        && request.resource.data.text.size() >= 10 && request.resource.data.text.size() <= 1000
+        && request.resource.data.nickname is string && request.resource.data.nickname.size() <= 20;
+      allow update, delete: if isAdmin();
+    }
+
+    // ── 수강 인증 캡처: 관리자만 볼 수 있음 ──
+    match /proofs/{id} {
+      allow create: if signedIn()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.image is string
+        && request.resource.data.image.size() < 900000;
+      allow read, delete: if isAdmin();
+    }
+
+    // ── 정보 제보 ──
+    match /corrections/{id} {
+      allow create: if signedIn()
+        && request.resource.data.status == 'open'
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.text is string
+        && request.resource.data.text.size() >= 5 && request.resource.data.text.size() <= 1000;
+      allow read, update, delete: if isAdmin();
+    }
+
+    // ── 관리자가 바꾼 선생님·강좌 정보: 모두가 읽고(화면에 반영), 관리자만 수정 ──
+    match /teacherEdits/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // ── 사이트 설정 (후기 공개 방식 등) ──
+    match /settings/{doc} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // ── 관리자 목록: 첫 관리자는 Firebase 콘솔에서 직접 추가, 그다음부터는 관리자가 사이트에서 추가 ──
+    match /admins/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow write: if isAdmin();
+    }
+  }
+}

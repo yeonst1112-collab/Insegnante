@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>후기 쓰기 · Insegnante</title>
+  <link rel="stylesheet" href="pages.css">
+</head>
+<body>
+  <header id="site-header"></header>
+
+  <main class="page">
+    <div class="card top-line">
+      <h1 class="page-title" id="title">수강 후기 쓰기</h1>
+      <p class="page-sub" id="subtitle">선생님 강좌를 <b>10% 이상</b> 수강했다면 후기를 쓸 수 있어요.</p>
+      <div id="notice"></div>
+
+      <div id="form-area" style="display:none">
+        <p class="guide" id="guide">수강 진도가 보이는 화면을 캡처해서 올려 주세요. <b>캡처는 관리자만 확인</b>하고, 다른 사람에게는 공개되지 않아요.
+          관리자가 확인하면 후기가 모든 사람에게 공개돼요.</p>
+
+        <form id="review-form" class="form">
+          <label>선생님
+            <input id="teacher" type="text" list="teacher-names" required maxlength="50" autocomplete="off"
+              placeholder="선생님 이름을 입력하세요 (예: 현우진)">
+            <datalist id="teacher-names"></datalist>
+            <span class="hint" id="teacher-info"></span>
+          </label>
+
+          <label>수강한 강좌
+            <select id="course" required>
+              <option value="">먼저 선생님을 골라 주세요</option>
+            </select>
+            <input id="course-etc" type="text" maxlength="100" placeholder="강좌 이름을 입력하세요" style="display:none">
+          </label>
+
+          <label>수강 진도율 (%)
+            <input id="progress" type="number" min="0" max="100" step="1" required placeholder="예: 35">
+            <span id="progress-msg" class="msg"></span>
+          </label>
+
+          <label id="proof-label">수강 인증 캡처 <span class="hint">진도율이 보이는 화면</span>
+            <input id="proof" type="file" accept="image/*">
+            <img id="proof-preview" class="proof-preview" alt="" style="display:none">
+          </label>
+
+          <label>별점
+            <div class="star-input" id="stars"></div>
+          </label>
+
+          <label>후기 <span class="hint">10자 이상 1000자 이하</span>
+            <textarea id="text" rows="7" minlength="10" maxlength="1000" required
+              placeholder="강의 스타일, 좋았던 점, 아쉬운 점, 추천하고 싶은 학생 등을 자유롭게 적어 주세요."></textarea>
+            <span class="hint" id="text-count">0 / 1000</span>
+          </label>
+
+          <label>닉네임 <span class="hint">후기에 표시되는 이름</span>
+            <input id="nick" type="text" maxlength="20" placeholder="익명">
+          </label>
+
+          <label class="check" id="agree-label">
+            <input id="agree" type="checkbox">
+            실제로 수강한 화면이며, 허위 인증이면 후기가 삭제되는 것에 동의해요.
+          </label>
+
+          <p id="error" class="msg error"></p>
+          <div class="btn-row">
+            <button class="btn" type="submit" id="submit">후기 등록하기</button>
+            <a class="btn ghost" id="cancel" href="reviews.html">취소</a>
+          </div>
+        </form>
+      </div>
+
+      <!-- 등록 완료 -->
+      <div id="done" style="display:none">
+        <p class="guide" id="done-msg"></p>
+        <div class="btn-row">
+          <a class="btn" id="done-view" href="reviews.html">후기 보러 가기</a>
+          <a class="btn ghost" href="write.html">다른 후기 쓰기</a>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+  <script src="firebase-config.js"></script>
+  <script src="teacher-list.js"></script>
+  <script src="site.js"></script>
+  <script>
+    /* =================================================================
+       후기 쓰기  (write.html?teacher=선생님이름)
+       후기 수정  (write.html?edit=후기ID)  ← 관리자만
+       ================================================================= */
+    const $ = id => document.getElementById(id);
+    const editId = qs('edit');
+    let rating = 0;
+    let editing = null;   // 수정 중인 후기 원본
+
+    /* ---------- 별점 ---------- */
+    $('stars').innerHTML = [1, 2, 3, 4, 5].map(i => `<button type="button" data-v="${i}" aria-label="${i}점">☆</button>`).join('');
+    $('stars').addEventListener('click', e => { const v = e.target.dataset.v; if (v) setRating(+v); });
+    function setRating(v) {
+      rating = v;
+      document.querySelectorAll('#stars button').forEach(b => {
+        const on = +b.dataset.v <= v;
+        b.textContent = on ? '★' : '☆';
+        b.classList.toggle('on', on);
+      });
+    }
+
+    /* ---------- 선생님 고르면 강좌 목록 채우기 ---------- */
+    function fillCourses(selected) {
+      const t = findTeacherInfo($('teacher').value.trim());
+      const sel = $('course');
+      $('teacher-info').textContent = t ? `${t.p.join(' · ')} | ${t.s.join(', ')}` : ($('teacher').value.trim() ? '목록에 없는 이름이에요. 목록에서 골라 주세요.' : '');
+      const courses = t ? t.c : [];
+      sel.innerHTML = `<option value="">${t ? '강좌를 선택하세요' : '먼저 선생님을 골라 주세요'}</option>`
+        + courses.map(c => `<option>${esc(c)}</option>`).join('')
+        + '<option value="__etc">기타 (직접 입력)</option>';
+      if (selected) {
+        if (courses.includes(selected)) sel.value = selected;
+        else { sel.value = '__etc'; $('course-etc').value = selected; }
+      }
+      $('course-etc').style.display = sel.value === '__etc' ? 'block' : 'none';
+    }
+    $('teacher').addEventListener('input', () => fillCourses());
+    $('course').addEventListener('change', () => { $('course-etc').style.display = $('course').value === '__etc' ? 'block' : 'none'; });
+
+    $('progress').addEventListener('input', () => {
+      const msg = $('progress-msg'), v = Number($('progress').value);
+      if (!$('progress').value) { msg.textContent = ''; return; }
+      if (v < 10) { msg.className = 'msg error'; msg.textContent = '10% 이상 수강해야 후기를 쓸 수 있어요.'; }
+      else if (v > 100) { msg.className = 'msg error'; msg.textContent = '100% 이하로 적어 주세요.'; }
+      else { msg.className = 'msg ok'; msg.textContent = '후기 작성 가능'; }
+    });
+    $('proof').addEventListener('change', () => {
+      const f = $('proof').files[0], img = $('proof-preview');
+      if (!f) { img.style.display = 'none'; return; }
+      img.src = URL.createObjectURL(f); img.style.display = 'block';
+    });
+    $('text').addEventListener('input', () => { $('text-count').textContent = $('text').value.length + ' / 1000'; });
+
+    /* ---------- 캡처 이미지를 줄여서 저장 (Firestore 문서는 1MB까지) ---------- */
+    function compressImage(file, maxSide = 1100) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+          const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+          const c = document.createElement('canvas');
+          c.width = Math.round(img.width * scale);
+          c.height = Math.round(img.height * scale);
+          c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+          let q = 0.75, url = c.toDataURL('image/jpeg', q);
+          while (url.length > 850000 && q > 0.3) { q -= 0.1; url = c.toDataURL('image/jpeg', q); }
+          URL.revokeObjectURL(img.src);
+          url.length > 850000 ? reject(new Error('too-big')) : resolve(url);
+        };
+        img.onerror = () => reject(new Error('bad-image'));
+        img.src = URL.createObjectURL(file);
+      });
+    }
+
+    // 관리자가 '바로 공개'를 켰는지 (settings/reviews.autoApprove)
+    async function getAutoApprove() {
+      try {
+        const d = await fb.db.collection('settings').doc('reviews').get();
+        return !!(d.exists && d.data().autoApprove === true);
+      } catch (e) { return false; }
+    }
+
+    /* ---------- 페이지 시작 ---------- */
+    (async () => {
+      const p = await authReady;
+      if (!firebaseEnabled()) { $('notice').innerHTML = NO_SERVER_HTML; return; }
+      if (!p) { goLogin(); return; }   // 로그인 안 했으면 로그인 페이지로
+
+      await loadTeacherList();
+      fillTeacherDatalist('teacher-names');
+
+      if (editId) {
+        // ----- 관리자: 후기 수정 -----
+        if (!p.isAdmin) { $('notice').innerHTML = '<div class="notice">후기 수정은 관리자만 할 수 있어요.</div>'; return; }
+        try {
+          const doc = await fb.db.collection('reviews').doc(editId).get();
+          if (!doc.exists) { $('notice').innerHTML = '<div class="notice">후기를 찾을 수 없어요. 이미 삭제됐을 수 있어요.</div>'; return; }
+          editing = { id: doc.id, ...doc.data() };
+        } catch (e) { $('notice').innerHTML = '<div class="notice">후기를 불러오지 못했어요.</div>'; return; }
+        document.title = '후기 수정 · Insegnante';
+        $('title').textContent = '수강 후기 수정 (관리자)';
+        $('subtitle').innerHTML = `<b>${esc(editing.nickname || '익명')}</b>님이 쓴 후기를 고쳐요. 고친 내용은 바로 저장돼요.`;
+        $('guide').style.display = 'none';
+        $('proof-label').style.display = 'none';
+        $('agree-label').style.display = 'none';
+        $('teacher').value = editing.teacher || '';
+        fillCourses(editing.course);
+        $('progress').value = editing.progress;
+        setRating(Number(editing.rating) || 0);
+        $('text').value = editing.text || '';
+        $('text-count').textContent = $('text').value.length + ' / 1000';
+        $('nick').value = editing.nickname || '';
+        $('submit').textContent = '수정 저장하기';
+        $('cancel').href = 'reviews.html?teacher=' + encodeURIComponent(editing.teacher || '');
+      } else {
+        // ----- 새 후기 -----
+        $('proof').required = true;
+        $('agree').required = true;
+        $('nick').value = p.nickname;
+        const pre = qs('teacher');
+        if (pre) { $('teacher').value = pre; $('cancel').href = 'reviews.html?teacher=' + encodeURIComponent(pre); }
+        fillCourses();
+        setRating(0);
+      }
+      $('form-area').style.display = 'block';
+    })();
+
+    /* ---------- 등록 / 수정 저장 ---------- */
+    $('review-form').addEventListener('submit', async ev => {
+      ev.preventDefault();
+      const err = $('error'), btn = $('submit');
+      err.textContent = '';
+
+      const teacher = $('teacher').value.trim();
+      let course = $('course').value;
+      if (course === '__etc') course = $('course-etc').value.trim();
+      const progress = Number($('progress').value);
+      const text = $('text').value.trim();
+      const nickname = $('nick').value.trim() || '익명';
+      const file = $('proof').files[0];
+
+      if (!findTeacherInfo(teacher)) return (err.textContent = '선생님 이름을 목록에서 골라 주세요.');
+      if (!course) return (err.textContent = '수강한 강좌를 선택하거나 입력해 주세요.');
+      if (!(progress >= 10 && progress <= 100)) return (err.textContent = '진도율은 10% 이상 100% 이하여야 해요.');
+      if (!rating) return (err.textContent = '별점을 선택해 주세요.');
+      if (text.length < 10) return (err.textContent = '후기를 10자 이상 적어 주세요.');
+
+      // ----- 관리자 수정 -----
+      if (editing) {
+        btn.disabled = true; btn.textContent = '저장 중...';
+        try {
+          await fb.db.collection('reviews').doc(editing.id).update({
+            teacher, course, progress, rating, text, nickname,
+            editedAt: serverTime(), editedBy: profile.uid
+          });
+          location.href = 'reviews.html?teacher=' + encodeURIComponent(teacher) + '&saved=1';
+        } catch (e) {
+          console.error(e);
+          err.textContent = '저장하지 못했어요. 관리자 계정인지, 보안 규칙을 게시했는지 확인해 주세요.';
+          btn.disabled = false; btn.textContent = '수정 저장하기';
+        }
+        return;
+      }
+
+      // ----- 새 후기 -----
+      if (!file) return (err.textContent = '수강 인증 캡처를 올려 주세요.');
+      if (!$('agree').checked) return (err.textContent = '동의 항목에 체크해 주세요.');
+
+      btn.disabled = true; btn.textContent = '등록 중...';
+      try {
+        const image = await compressImage(file);
+        const autoApprove = await getAutoApprove();
+        const status = autoApprove ? 'approved' : 'pending';
+        const reviewRef = fb.db.collection('reviews').doc();          // 새 후기 문서
+        const proofRef = fb.db.collection('proofs').doc(reviewRef.id); // 같은 ID로 인증 캡처 보관 (관리자만 볼 수 있음)
+        const batch = fb.db.batch();
+        batch.set(proofRef, { image, uid: profile.uid, teacher, createdAt: serverTime() });
+        batch.set(reviewRef, { teacher, course, progress, rating, text, nickname, status, uid: profile.uid, createdAt: serverTime() });
+        await batch.commit();
+
+        // index.html 의 '내가 쓴 후기'에도 바로 보이도록 이 브라우저에 기록
+        try {
+          const key = 'insegnante.myReviews';
+          const list = JSON.parse(localStorage.getItem(key) || '[]');
+          list.unshift({ id: reviewRef.id, teacher, course, progress, rating, text, nickname, status, createdAt: new Date().toISOString() });
+          localStorage.setItem(key, JSON.stringify(list));
+        } catch (e) { }
+
+        $('form-area').style.display = 'none';
+        $('done').style.display = 'block';
+        $('title').textContent = '후기가 등록됐어요!';
+        $('subtitle').textContent = '';
+        $('done-msg').innerHTML = autoApprove
+          ? '지금 바로 <b>모든 사람에게 공개</b>됐어요. 소중한 후기 고마워요.'
+          : '관리자가 수강 인증 캡처를 확인하면 <b>모든 사람에게 공개</b>돼요. 그전까지는 나에게만 "승인 대기"로 보여요.';
+        $('done-view').href = 'reviews.html?teacher=' + encodeURIComponent(teacher);
+      } catch (e) {
+        console.error(e);
+        err.textContent = e.message === 'too-big' ? '이미지가 너무 커요. 화면 일부만 캡처해 주세요.'
+          : e.message === 'bad-image' ? '이미지 파일을 읽을 수 없어요.'
+          : '등록하지 못했어요. 잠시 후 다시 시도해 주세요. (' + (e.code || e.message) + ')';
+        btn.disabled = false; btn.textContent = '후기 등록하기';
+      }
+    });
+  </script>
+</body>
+</html>

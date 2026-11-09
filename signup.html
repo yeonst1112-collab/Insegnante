@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>회원가입 · Insegnante</title>
+  <link rel="stylesheet" href="pages.css">
+</head>
+<body>
+  <header id="site-header"></header>
+
+  <main class="page narrow">
+    <div class="card top-line">
+      <h1 class="page-title">회원가입</h1>
+      <p class="page-sub">가입은 무료예요. 회원이 되면 선생님별 수강 후기를 쓸 수 있어요.</p>
+      <div id="server-notice"></div>
+
+      <form id="signup-form" class="form">
+        <label>이메일
+          <input id="email" type="email" required autocomplete="email" placeholder="example@email.com">
+        </label>
+        <label>비밀번호 <span class="hint">6자 이상</span>
+          <input id="pw" type="password" required minlength="6" autocomplete="new-password">
+        </label>
+        <label>비밀번호 확인
+          <input id="pw2" type="password" required minlength="6" autocomplete="new-password">
+        </label>
+        <label>닉네임 <span class="hint">2~12자, 후기에 표시돼요</span>
+          <input id="nick" type="text" required minlength="2" maxlength="12" placeholder="예: 수능열공러">
+        </label>
+        <p id="error" class="msg error"></p>
+        <button class="btn block" type="submit" id="submit">가입하기</button>
+      </form>
+
+      <div class="link-row">이미 회원이신가요? <a id="login-link" href="login.html">로그인</a></div>
+    </div>
+  </main>
+
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+  <script src="firebase-config.js"></script>
+  <script src="site.js"></script>
+  <script>
+    const next = safeNext(qs('next'));
+    document.getElementById('login-link').href = 'login.html?next=' + encodeURIComponent(next);
+    authReady.then(() => { if (!firebaseEnabled()) document.getElementById('server-notice').innerHTML = NO_SERVER_HTML; });
+
+    function signupErrorText(e) {
+      const map = {
+        'auth/email-already-in-use': '이미 가입된 이메일이에요. 로그인해 주세요.',
+        'auth/invalid-email': '이메일 형식이 올바르지 않아요.',
+        'auth/weak-password': '비밀번호는 6자 이상이어야 해요.',
+        'auth/network-request-failed': '인터넷 연결을 확인해 주세요.',
+        'auth/operation-not-allowed': 'Firebase에서 "이메일/비밀번호" 로그인이 아직 켜져 있지 않아요.',
+        'auth/unauthorized-domain': '이 주소에서는 가입할 수 없어요. Firebase "승인된 도메인"에 주소를 추가해 주세요.'
+      };
+      return map[e && e.code] || ('가입하지 못했어요. (' + ((e && (e.code || e.message)) || '') + ')');
+    }
+
+    document.getElementById('signup-form').addEventListener('submit', async ev => {
+      ev.preventDefault();
+      const err = document.getElementById('error');
+      const btn = document.getElementById('submit');
+      const email = document.getElementById('email').value.trim();
+      const pw = document.getElementById('pw').value;
+      const pw2 = document.getElementById('pw2').value;
+      const nickname = document.getElementById('nick').value.trim();
+      err.textContent = '';
+      if (pw !== pw2) { err.textContent = '비밀번호 확인이 일치하지 않아요.'; return; }
+      if (nickname.length < 2 || nickname.length > 12) { err.textContent = '닉네임은 2~12자로 정해 주세요.'; return; }
+      if (!initFirebase()) { err.textContent = '서버가 연결되지 않았어요.'; return; }
+
+      btn.disabled = true; btn.textContent = '가입 중...';
+      try {
+        // 1) 로그인 계정 만들기 (Authentication)
+        const cred = await fb.auth.createUserWithEmailAndPassword(email, pw);
+        // 2) 회원 정보(닉네임) 저장 (Firestore users/{uid})
+        await fb.db.collection('users').doc(cred.user.uid).set({
+          nickname, email: cred.user.email || email.toLowerCase(), createdAt: serverTime()
+        });
+        alert(nickname + '님, 가입을 환영해요!');
+        location.replace(next);
+      } catch (e) {
+        err.textContent = signupErrorText(e);
+        btn.disabled = false; btn.textContent = '가입하기';
+      }
+    });
+  </script>
+</body>
+</html>

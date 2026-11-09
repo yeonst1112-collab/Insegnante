@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>로그인 · Insegnante</title>
+  <link rel="stylesheet" href="pages.css">
+</head>
+<body>
+  <header id="site-header"></header>
+
+  <main class="page narrow">
+    <div class="card top-line">
+      <h1 class="page-title">로그인</h1>
+      <p class="page-sub">로그인하면 수강 후기를 쓰고, 내가 쓴 후기를 관리할 수 있어요.</p>
+      <div id="server-notice"></div>
+
+      <!-- 이미 로그인한 경우 -->
+      <div id="already" style="display:none">
+        <p class="guide"><b id="already-name"></b>님으로 로그인되어 있어요.</p>
+        <div class="btn-row">
+          <a class="btn" id="already-go" href="index.html">계속하기</a>
+          <button class="btn ghost" onclick="logout()">로그아웃</button>
+        </div>
+      </div>
+
+      <form id="login-form" class="form">
+        <label>이메일
+          <input id="email" type="email" required autocomplete="email" placeholder="example@email.com">
+        </label>
+        <label>비밀번호
+          <input id="pw" type="password" required minlength="6" autocomplete="current-password">
+        </label>
+        <p id="error" class="msg error"></p>
+        <button class="btn block" type="submit" id="submit">로그인</button>
+      </form>
+
+      <div class="link-row" id="links">
+        아직 회원이 아니신가요? <a id="signup-link" href="signup.html">회원가입</a>
+        <br><button class="text-btn" type="button" onclick="sendReset()" style="margin-top:8px">비밀번호를 잊었어요</button>
+      </div>
+    </div>
+  </main>
+
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+  <script src="firebase-config.js"></script>
+  <script src="site.js"></script>
+  <script>
+    const next = safeNext(qs('next'));
+    document.getElementById('signup-link').href = 'signup.html?next=' + encodeURIComponent(next);
+
+    // Firebase 오류 코드를 쉬운 말로
+    function authErrorText(e) {
+      const map = {
+        'auth/invalid-email': '이메일 형식이 올바르지 않아요.',
+        'auth/wrong-password': '이메일 또는 비밀번호가 맞지 않아요.',
+        'auth/user-not-found': '이메일 또는 비밀번호가 맞지 않아요.',
+        'auth/invalid-credential': '이메일 또는 비밀번호가 맞지 않아요.',
+        'auth/invalid-login-credentials': '이메일 또는 비밀번호가 맞지 않아요.',
+        'auth/too-many-requests': '시도가 너무 많아요. 잠시 후 다시 시도해 주세요.',
+        'auth/network-request-failed': '인터넷 연결을 확인해 주세요.',
+        'auth/operation-not-allowed': 'Firebase에서 "이메일/비밀번호" 로그인이 아직 켜져 있지 않아요.',
+        'auth/unauthorized-domain': '이 주소에서는 로그인할 수 없어요. Firebase "승인된 도메인"에 주소를 추가해 주세요.'
+      };
+      return map[e && e.code] || ('로그인하지 못했어요. (' + ((e && (e.code || e.message)) || '') + ')');
+    }
+
+    authReady.then(p => {
+      if (!firebaseEnabled()) { document.getElementById('server-notice').innerHTML = NO_SERVER_HTML; return; }
+      if (p) {   // 이미 로그인됨
+        document.getElementById('login-form').style.display = 'none';
+        document.getElementById('links').style.display = 'none';
+        document.getElementById('already').style.display = 'block';
+        document.getElementById('already-name').textContent = p.nickname;
+        document.getElementById('already-go').href = next;
+      }
+    });
+
+    document.getElementById('login-form').addEventListener('submit', async ev => {
+      ev.preventDefault();
+      const err = document.getElementById('error');
+      const btn = document.getElementById('submit');
+      if (!initFirebase()) { err.textContent = '서버가 연결되지 않았어요.'; return; }
+      err.textContent = '';
+      btn.disabled = true; btn.textContent = '로그인 중...';
+      try {
+        await fb.auth.signInWithEmailAndPassword(document.getElementById('email').value.trim(), document.getElementById('pw').value);
+        location.replace(next);   // 원래 있던 페이지로 돌아가기
+      } catch (e) {
+        err.textContent = authErrorText(e);
+        btn.disabled = false; btn.textContent = '로그인';
+      }
+    });
+
+    async function sendReset() {
+      const err = document.getElementById('error');
+      const email = document.getElementById('email').value.trim();
+      if (!email) { err.className = 'msg error'; err.textContent = '비밀번호를 다시 정할 이메일을 먼저 적어 주세요.'; return; }
+      if (!initFirebase()) return;
+      try {
+        await fb.auth.sendPasswordResetEmail(email);
+        err.className = 'msg ok'; err.textContent = '비밀번호 재설정 메일을 보냈어요. 메일함을 확인해 주세요.';
+      } catch (e) { err.className = 'msg error'; err.textContent = authErrorText(e); }
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>수강 후기 · Insegnante</title>
+  <link rel="stylesheet" href="pages.css">
+</head>
+<body>
+  <header id="site-header"></header>
+
+  <main class="page">
+    <div class="card top-line">
+      <h1 class="page-title">수강 후기</h1>
+      <p class="page-sub">모든 후기는 강좌를 <b>10% 이상 수강 인증</b>한 학생이 쓴 후기예요.</p>
+      <div id="notice"></div>
+
+      <!-- 선생님 검색 -->
+      <form class="toolbar" id="search-form">
+        <input id="search" type="text" list="teacher-names" autocomplete="off" placeholder="선생님 이름으로 후기 찾기 (예: 현우진)">
+        <datalist id="teacher-names"></datalist>
+        <button class="btn" type="submit">검색</button>
+        <button class="btn ghost" type="button" id="clear" style="display:none">전체 후기</button>
+      </form>
+
+      <div id="teacher-box"></div>
+      <div class="tabs" id="tabs"></div>
+      <div id="chips"></div>
+      <div id="list"><p class="empty">불러오는 중...</p></div>
+    </div>
+  </main>
+
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+  <script src="firebase-config.js"></script>
+  <script src="teacher-list.js"></script>
+  <script src="site.js"></script>
+  <script>
+    /* =================================================================
+       수강 후기 보기  (reviews.html?teacher=선생님이름)
+       - 누구나: 공개된(승인된) 후기 보기
+       - 회원: '내 후기' 탭에서 승인 대기 중인 내 후기 확인 · 삭제
+       - 관리자: 승인 대기 / 반려 / 전체 탭, 승인 · 반려 · 수정 · 삭제 · 인증 캡처 보기
+       ================================================================= */
+    const $ = id => document.getElementById(id);
+    let teacher = qs('teacher');
+    let tab = 'public';
+    let reviews = [];
+
+    const STATUS = { pending: '승인 대기', approved: '공개됨', rejected: '반려됨' };
+
+    function setUrl() {
+      const url = teacher ? 'reviews.html?teacher=' + encodeURIComponent(teacher) : 'reviews.html';
+      try { history.replaceState(null, '', url); } catch (e) { /* 주소창만 못 바꿀 뿐 화면은 정상 */ }
+    }
+
+    /* ---------- 탭 ---------- */
+    function renderTabs() {
+      const list = [['public', '공개 후기']];
+      if (profile) list.push(['mine', '내 후기']);
+      if (profile && profile.isAdmin) list.push(['pending', '승인 대기'], ['rejected', '반려됨'], ['all', '전체 (관리자)']);
+      $('tabs').innerHTML = list.map(([k, l]) =>
+        `<button class="${tab === k ? 'on' : ''}" data-tab="${k}">${l}${k === 'pending' && pendingCount ? `<span class="count">${pendingCount}</span>` : ''}</button>`).join('');
+    }
+    $('tabs').addEventListener('click', e => {
+      const b = e.target.closest('button[data-tab]');
+      if (b) { tab = b.dataset.tab; load(); }
+    });
+
+    /* ---------- 선생님 정보 상자 ---------- */
+    function renderTeacherBox() {
+      $('clear').style.display = teacher ? '' : 'none';
+      if (!teacher) { $('teacher-box').innerHTML = ''; return; }
+      const t = findTeacherInfo(teacher);
+      const pub = reviews.filter(r => r.status === 'approved');
+      const avg = pub.length ? pub.reduce((s, r) => s + (Number(r.rating) || 0), 0) / pub.length : 0;
+      $('teacher-box').innerHTML = `
+        <div class="teacher-box">
+          <div>
+            <h2>${esc(teacher)} 선생님</h2>
+            <div class="meta">${t ? esc(t.p.join(' · ') + ' | ' + t.s.join(', ')) : '목록에 없는 선생님'}</div>
+            ${tab === 'public' ? `<div class="avg">${pub.length
+              ? `<span class="stars">${stars(avg)}</span> <b>${avg.toFixed(1)}</b> <span class="muted">(후기 ${pub.length}개)</span>`
+              : '<span class="muted">아직 공개된 후기가 없어요</span>'}</div>` : ''}
+          </div>
+          <a class="btn" href="write.html?teacher=${encodeURIComponent(teacher)}">이 선생님 후기 쓰기</a>
+        </div>`;
+    }
+
+    /* ---------- 후기 불러오기 ---------- */
+    let pendingCount = 0;
+
+    async function load() {
+      renderTabs();
+      $('list').innerHTML = '<p class="empty">불러오는 중...</p>';
+      $('chips').innerHTML = '';
+      const col = fb.db.collection('reviews');
+      let q;
+      if (tab === 'public') q = teacher ? col.where('teacher', '==', teacher).where('status', '==', 'approved') : col.where('status', '==', 'approved');
+      else if (tab === 'mine') q = col.where('uid', '==', profile.uid);
+      else if (tab === 'pending' || tab === 'rejected') q = col.where('status', '==', tab);
+      else q = teacher ? col.where('teacher', '==', teacher) : col;
+
+      try {
+        const snap = await q.limit(300).get();
+        reviews = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+          .filter(r => !teacher || r.teacher === teacher)
+          .sort((a, b) => timeOf(b) - timeOf(a));
+      } catch (e) {
+        console.error(e);
+        $('list').innerHTML = '<p class="empty">후기를 불러오지 못했어요. 보안 규칙(firestore.rules)을 게시했는지 확인해 주세요.</p>';
+        return;
+      }
+      if (profile && profile.isAdmin) {
+        try { pendingCount = (await col.where('status', '==', 'pending').limit(300).get()).size; renderTabs(); } catch (e) { }
+      }
+      renderTeacherBox();
+      renderChips();
+      renderList();
+    }
+
+    // 선생님을 고르지 않았을 때: 후기가 많은 선생님 바로가기
+    function renderChips() {
+      if (teacher || tab !== 'public' || !reviews.length) return;
+      const count = {};
+      reviews.forEach(r => { count[r.teacher] = (count[r.teacher] || 0) + 1; });
+      const top = Object.entries(count).sort((a, b) => b[1] - a[1]).slice(0, 15);
+      $('chips').innerHTML = `<div class="chips">${top.map(([n, c]) =>
+        `<a class="chip" href="reviews.html?teacher=${encodeURIComponent(n)}" data-teacher="${esc(n)}">${esc(n)} ${c}</a>`).join('')}</div>`;
+    }
+    $('chips').addEventListener('click', e => {
+      const a = e.target.closest('a[data-teacher]');
+      if (a) { e.preventDefault(); pickTeacher(a.dataset.teacher); }
+    });
+
+    /* ---------- 후기 목록 그리기 ---------- */
+    function renderList() {
+      const isAdmin = profile && profile.isAdmin;
+      if (!reviews.length) {
+        const empty = {
+          public: teacher ? '아직 공개된 후기가 없어요. 첫 후기를 남겨 주세요!' : '아직 공개된 후기가 없어요.',
+          mine: '아직 쓴 후기가 없어요.',
+          pending: '승인을 기다리는 후기가 없어요.',
+          rejected: '반려된 후기가 없어요.',
+          all: '후기가 없어요.'
+        }[tab];
+        $('list').innerHTML = `<p class="empty">${empty}<br><a href="write.html${teacher ? '?teacher=' + encodeURIComponent(teacher) : ''}">후기 쓰러 가기 ›</a></p>`;
+        return;
+      }
+      $('list').innerHTML = reviews.map(r => {
+        const mine = profile && r.uid === profile.uid;
+        const acts = [];
+        if (isAdmin) {
+          if (r.status !== 'approved') acts.push(`<button class="mini-btn accent" data-act="approve">승인 (공개)</button>`);
+          if (r.status !== 'rejected') acts.push(`<button class="mini-btn" data-act="reject">반려 (비공개)</button>`);
+          acts.push(`<a class="mini-btn" href="write.html?edit=${encodeURIComponent(r.id)}">수정</a>`);
+          acts.push(`<button class="mini-btn" data-act="proof">인증 캡처 보기</button>`);
+        }
+        if (isAdmin) acts.push(`<button class="mini-btn danger" data-act="delete">삭제</button>`);
+        return `
+          <div class="review${mine ? ' mine' : ''}" data-id="${esc(r.id)}">
+            <div class="review-head">
+              <a class="review-teacher" href="reviews.html?teacher=${encodeURIComponent(r.teacher)}" data-teacher="${esc(r.teacher)}">${esc(r.teacher)}</a>
+              <span>
+                ${r.status !== 'approved' || tab !== 'public' ? `<span class="status ${esc(r.status)}">${mine ? '내 후기 · ' : ''}${STATUS[r.status] || esc(r.status)}</span>` : ''}
+                <span class="verified">수강 인증 ${Math.round(Number(r.progress) || 0)}%</span>
+              </span>
+            </div>
+            <div class="review-head" style="margin-top:6px"><span class="stars">${stars(r.rating)}</span></div>
+            <div class="review-course">${esc(r.course)}</div>
+            <div class="review-text">${esc(r.text)}</div>
+            <div class="review-meta">${esc(r.nickname || '익명')} · ${fmtDate(r.createdAt) || '방금 전'}${r.editedAt ? ' · 관리자가 수정함' : ''}</div>
+            ${acts.length ? `<div class="review-actions">${acts.join('')}</div>` : ''}
+            <div class="proof-box"></div>
+          </div>`;
+      }).join('');
+    }
+
+    /* ---------- 승인 · 반려 · 삭제 · 캡처 보기 ---------- */
+    $('list').addEventListener('click', async e => {
+      const t = e.target.closest('a[data-teacher]');
+      if (t) { e.preventDefault(); pickTeacher(t.dataset.teacher); return; }
+      const b = e.target.closest('button[data-act]');
+      if (!b) return;
+      const box = b.closest('.review');
+      const id = box.dataset.id;
+      const act = b.dataset.act;
+      try {
+        if (act === 'approve' || act === 'reject') {
+          if (!confirm(act === 'approve' ? '이 후기를 모든 사람에게 공개할까요?' : '이 후기를 반려할까요? 다른 사람에게 보이지 않게 돼요.')) return;
+          await fb.db.collection('reviews').doc(id).update({
+            status: act === 'approve' ? 'approved' : 'rejected', reviewedAt: serverTime(), reviewedBy: profile.uid
+          });
+          load();
+        } else if (act === 'delete') {
+          if (!confirm('이 후기를 삭제할까요? 되돌릴 수 없어요.')) return;
+          await fb.db.collection('reviews').doc(id).delete();
+          try { await fb.db.collection('proofs').doc(id).delete(); } catch (err) { /* 캡처가 없을 수도 있음 */ }
+          load();
+        } else if (act === 'proof') {
+          const pb = box.querySelector('.proof-box');
+          if (pb.innerHTML) { pb.innerHTML = ''; return; }
+          const doc = await fb.db.collection('proofs').doc(id).get();
+          pb.innerHTML = doc.exists && doc.data().image
+            ? `<img class="proof-img" src="${esc(doc.data().image)}" alt="수강 인증 캡처">`
+            : '<p class="msg error" style="margin-top:8px">인증 캡처가 없어요.</p>';
+        }
+      } catch (err) {
+        console.error(err);
+        alert('처리하지 못했어요. 권한이 있는 계정인지 확인해 주세요. (' + (err.code || err.message) + ')');
+      }
+    });
+
+    /* ---------- 선생님 검색 ---------- */
+    function pickTeacher(name) {
+      teacher = name;
+      $('search').value = name;
+      if (tab === 'mine' || tab === 'pending' || tab === 'rejected') { /* 탭은 그대로, 선생님만 거름 */ }
+      setUrl();
+      load();
+    }
+    $('search-form').addEventListener('submit', e => {
+      e.preventDefault();
+      const v = $('search').value.trim();
+      if (!v) { $('clear').click(); return; }
+      // 이름 일부만 써도 찾아 주기 (예: '우진' → '현우진')
+      const exact = findTeacherInfo(v);
+      const part = exact ? null : teacherList.filter(t => t.n.includes(v));
+      if (exact || !part.length) pickTeacher(exact ? exact.n : v);
+      else if (part.length === 1) pickTeacher(part[0].n);
+      else {
+        $('teacher-box').innerHTML = '';
+        $('chips').innerHTML = `<p class="hint" style="margin-bottom:8px">'${esc(v)}'이(가) 들어간 선생님이 여러 명이에요. 골라 주세요.</p>
+          <div class="chips">${part.slice(0, 30).map(t => `<a class="chip" href="#" data-teacher="${esc(t.n)}">${esc(t.n)} <span class="muted">${esc(t.p[0] || '')}</span></a>`).join('')}</div>`;
+      }
+    });
+    $('clear').addEventListener('click', () => { teacher = ''; $('search').value = ''; setUrl(); load(); });
+
+    /* ---------- 페이지 시작 ---------- */
+    let started = false;
+    (async () => {
+      await authReady;
+      if (!firebaseEnabled()) { $('notice').innerHTML = NO_SERVER_HTML; $('list').innerHTML = ''; return; }
+      if (qs('saved')) { $('notice').innerHTML = '<div class="guide">후기를 수정해서 저장했어요.</div>'; setUrl(); }
+      await loadTeacherList();
+      fillTeacherDatalist('teacher-names');
+      $('search').value = teacher;
+      started = true;
+      load();
+    })();
+    // 페이지를 연 뒤 로그인 상태가 바뀌면 다시 그림
+    document.addEventListener('authchange', () => {
+      if (!started) return;
+      if (!profile) tab = 'public';
+      load();
+    });
+  </script>
+</body>
+</html>
